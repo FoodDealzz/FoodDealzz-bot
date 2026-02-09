@@ -2,18 +2,23 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+TOKEN = os.environ.get("BOT_TOKEN")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 BOT FOODDEALZZ ACTIF 🔥")
+    await update.message.reply_text("✅ Bot OK (Render)")
 
 async def main():
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise RuntimeError("BOT_TOKEN manquant dans Render")
+    if not TOKEN:
+        raise ValueError("BOT_TOKEN manquant dans les variables Render")
 
-    print("=== BOT START ===", flush=True)
-
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
 
-    print("=== POLLING START ===", flush=True)
+    print("=== BOT START ===")
+    print("=== POLLING START ===")
+
     await app.run_polling()
+
+if name == "__main__":
+    import asyncio
+    asyncio.run(main())
