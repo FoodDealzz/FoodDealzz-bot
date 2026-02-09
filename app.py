@@ -16,10 +16,11 @@ def home():
 def run_bot():
     asyncio.run(main())
 
-if name == "__main__":
+if __name__ == "__main__":
     # lance le bot en arrière-plan
     threading.Thread(target=run_bot, daemon=True).start()
 
     # ouvre le port pour Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
