@@ -3,20 +3,17 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Je suis en ligne !")
+    await update.message.reply_text("🔥 BOT FOODDEALZZ ACTIF 🔥")
 
 async def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
-        raise RuntimeError("BOT_TOKEN manquant dans Render (Environment Variables)")
+        raise RuntimeError("BOT_TOKEN manquant dans Render")
 
-    print("=== BOT: building application ===", flush=True)
+    print("=== BOT START ===", flush=True)
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
 
-    print("=== BOT: starting polling ===", flush=True)
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
+    print("=== POLLING START ===", flush=True)
+    await app.run_polling()
