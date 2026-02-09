@@ -5,7 +5,7 @@ from flask import Flask
 
 # 👉 importe ton code bot depuis bot.py
 # IMPORTANT: dans bot.py il doit y avoir une fonction async "main()"
-from bot import main
+from app import main
 
 app = Flask(__name__)
 
@@ -23,4 +23,5 @@ if __name__ == "__main__":
     # ouvre le port pour Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
