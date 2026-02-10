@@ -1,227 +1,122 @@
 import os
 import asyncio
-import threading
-from typing import Optional
-
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
     MessageHandler,
+    ContextTypes,
     filters,
 )
 
-# ====== ENV ======
-TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_ID_STR = os.getenv("ADMIN_ID", "").strip()
-WHATSAPP_URL = os.getenv("WHATSAPP_URL", "").strip()
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = os.environ.get("ADMIN_ID")  # doit être un nombre en texte, ex: "123456789"
 
-if not TOKEN:
-    raise RuntimeError("BOT_TOKEN manquant (Render > Environment).")
-if not ADMIN_ID_STR:
-    raise RuntimeError("ADMIN_ID manquant (Render > Environment).")
+if not BOT_TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN manquant (Render > Environment)")
+if not ADMIN_ID:
+    raise RuntimeError("❌ ADMIN_ID manquant (Render > Environment)")
 
-ADMIN_ID = int(ADMIN_ID_STR)
+ADMIN_ID_INT = int(ADMIN_ID)
 
-# ====== Global thread state ======
-_bot_thread: Optional[threading.Thread] = None
-_started = False
+# --- Clavier en bas (comme photo 2) ---
+MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("🛒 Commander")],
+        [KeyboardButton("📞 Contacter admin")],
+    ],
+    resize_keyboard=True,
+    one_time_keyboard=False,
+)
 
-# ====== Simple in-memory state (par user) ======
-# state: None | "WAIT_UBER_LINK"
-USER_STATE = {}  # user_id -> state
-USER_PAYMENT = {}  # user_id -> "CB" | "ESPECES"
+# Petit “state” en mémoire : qui doit envoyer son lien
+WAITING_LINK = set()
 
-# ====== Keyboards ======
-def kb_home() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 Commander", callback_data="go_order")],
-        [InlineKeyboardButton("📞 Appeler un admin", callback_data="call_admin")],
-    ])
 
-def kb_payment() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Carte bancaire", callback_data="pay_card")],
-        [InlineKeyboardButton("💶 Espèces", callback_data="pay_cash")],
-        [InlineKeyboardButton("↩️ Retour", callback_data="back_home")],
-    ])
-
-def kb_back() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("↩️ Retour", callback_data="back_home")],
-    ])
-
-def kb_admin() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📌 Voir mon ADMIN_ID", callback_data="admin_id")],
-    ])
-
-# ====== Commands ======
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not user or not update.message:
-        return
-
-    # Reset state quand on fait /start
-    USER_STATE.pop(user.id, None)
-    USER_PAYMENT.pop(user.id, None)
-
-    # Admin
-    if user.id == ADMIN_ID:
-        await update.message.reply_text("🛠️ Admin panel", reply_markup=kb_admin())
-        return
-
-    # Client : menu direct (pas de message "welcome" long)
-    await update.message.reply_text("Choisis une option :", reply_markup=kb_home())
-
-# ====== Callbacks ======
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    await q.answer()
-
-    user = update.effective_user
-    chat = update.effective_chat
-    if not user or not chat:
-        return
-
-    data = q.data or ""
-
-    # Admin
-    if user.id == ADMIN_ID and data == "admin_id":
-        await q.edit_message_text(f"✅ Ton ADMIN_ID = {ADMIN_ID}")
-        return
-
-    # Client flow
-    if data == "back_home":
-        USER_STATE.pop(user.id, None)
-        USER_PAYMENT.pop(user.id, None)
-        await q.edit_message_text("Choisis une option :", reply_markup=kb_home())
-        return
-
-    if data == "go_order":
-        USER_STATE.pop(user.id, None)
-        USER_PAYMENT.pop(user.id, None)
-        await q.edit_message_text("Choisis ton mode de paiement :", reply_markup=kb_payment())
-        return
-
-    if data in ("pay_card", "pay_cash"):
-        USER_PAYMENT[user.id] = "CB" if data == "pay_card" else "ESPECES"
-        USER_STATE[user.id] = "WAIT_UBER_LINK"
-        await q.edit_message_text(
-            "✅ Ok.\n"
-            "Maintenant, envoie ton lien Uber Eats ici (un lien qui commence par http).\n\n"
-            "Exemple : https://...",
-            reply_markup=kb_back(),
-        )
-        return
-
-    if data == "call_admin":
-        username = f"@{user.username}" if user.username else "(pas de username)"
-        msg_admin = (
-            "📞 Un client demande un admin\n"
-            f"• Nom: {user.first_name}\n"
-            f"• Username: {username}\n"
-            f"• User ID: {user.id}\n"
-            f"• Chat ID: {chat.id}"
-        )
-        await context.bot.send_message(chat_id=ADMIN_ID, text=msg_admin)
-
-        if WHATSAPP_URL:
-            await q.edit_message_text(
-                "✅ Ok. Clique ici pour contacter l’admin :",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📞 Contacter l’admin", url=WHATSAPP_URL)],
-                    [InlineKeyboardButton("↩️ Retour", callback_data="back_home")],
-                ]),
-                disable_web_page_preview=True,
-            )
-        else:
-            await q.edit_message_text("✅ Ok. Un admin va te contacter.", reply_markup=kb_home())
-        return
-
-# ====== Messages (réception du lien Uber Eats) ======
-def _looks_like_url(text: str) -> bool:
-    t = text.strip().lower()
-    return t.startswith("http://") or t.startswith("https://")
-
-async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat = update.effective_chat
-    msg = update.message
-    if not user or not chat or not msg or not msg.text:
-        return
-
-    # Admin: on ignore ici (tu peux ajouter commandes admin plus tard)
-    if user.id == ADMIN_ID:
-        return
-
-    state = USER_STATE.get(user.id)
-
-    # Si le client n'est pas en "commande", on ne répond pas (comme tu veux)
-    if state != "WAIT_UBER_LINK":
-        return
-
-    text = msg.text.strip()
-
-    if not _looks_like_url(text):
-        await msg.reply_text(
-            "⚠️ Envoie un lien valide (qui commence par http).\n"
-            "Sinon clique ↩️ Retour.",
-            reply_markup=kb_back(),
-        )
-        return
-
-    payment = USER_PAYMENT.get(user.id, "N/A")
-    username = f"@{user.username}" if user.username else "(pas de username)"
-
-    # Envoi à l'admin
-    msg_admin = (
-        "🛒 Nouvelle commande (lien client)\n"
-        f"• Paiement: {payment}\n"
-        f"• Client: {user.first_name} ({username})\n"
-        f"• User ID: {user.id}\n"
-        f"• Lien Uber Eats: {text}"
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # IMPORTANT : pas de “Bot running” -> direct menu
+    await update.message.reply_text(
+        "Choisis une option :",
+        reply_markup=MENU_KEYBOARD,
     )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=msg_admin, disable_web_page_preview=True)
 
-    # Confirmation courte au client (pas de welcome/deals)
-    await msg.reply_text("✅ Reçu.", reply_markup=kb_home())
 
-    # Reset state
-    USER_STATE.pop(user.id, None)
-    USER_PAYMENT.pop(user.id, None)
+async def commander(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    WAITING_LINK.add(chat_id)
 
-# ===== Bot runner (thread-safe) =====
-async def _run_bot_async():
-    app = Application.builder().token(TOKEN).build()
+    await update.message.reply_text(
+        "📎 Envoie ton lien Uber Eats",
+        reply_markup=ReplyKeyboardRemove(),  # retire le clavier le temps d’envoyer le lien
+    )
 
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+
+async def contacter_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    # Message côté client
+    await update.message.reply_text(
+        "✅ Ok. Un admin va te répondre ici.",
+        reply_markup=MENU_KEYBOARD,
+    )
+
+    # Notif côté admin
+    txt = (
+        "📞 Demande admin\n"
+        f"👤 {user.full_name}\n"
+        f"🆔 {user.id}\n"
+        f"💬 ChatID: {update.effective_chat.id}"
+    )
+    await context.bot.send_message(chat_id=ADMIN_ID_INT, text=txt)
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    text = (update.message.text or "").strip()
+
+    # Si il a cliqué sur les boutons (ReplyKeyboard) -> on route
+    if text == "🛒 Commander":
+        return await commander(update, context)
+    if text == "📞 Contacter admin":
+        return await contacter_admin(update, context)
+
+    # Si on attend un lien Uber Eats
+    if chat_id in WAITING_LINK:
+        WAITING_LINK.discard(chat_id)
+
+        # Envoie à l’admin
+        admin_msg = (
+            "🛒 Nouvelle commande\n"
+            f"👤 {user.full_name}\n"
+            f"🆔 {user.id}\n"
+            f"🔗 {text}"
+        )
+        await context.bot.send_message(chat_id=ADMIN_ID_INT, text=admin_msg)
+
+        # Réponse client
+        await update.message.reply_text(
+            "✅ Lien reçu. Un admin va répondre ici.",
+            reply_markup=MENU_KEYBOARD,
+        )
+        return
+
+    # Sinon, on remet juste le menu
+    await update.message.reply_text(
+        "Choisis une option :",
+        reply_markup=MENU_KEYBOARD,
+    )
+
+
+async def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
+    await app.updater.start_polling()
 
+    # garde le bot vivant
     await asyncio.Event().wait()
-
-def _thread_main():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(_run_bot_async())
-
-def run_bot():
-    global _bot_thread, _started
-    if _started:
-        return
-    _started = True
-    _bot_thread = threading.Thread(target=_thread_main, daemon=True)
-    _bot_thread.start()
