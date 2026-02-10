@@ -8,7 +8,6 @@ app = Flask(__name__)
 def home():
     return "OK", 200
 
-# Démarre le bot 24/24 en arrière-plan
 run_bot()
 
 if __name__ == "__main__":
