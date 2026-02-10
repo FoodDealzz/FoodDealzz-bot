@@ -1,18 +1,26 @@
 import os
-import threading
-from flask import Flask
+import asyncio
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-from bot import run_bot  # on importe la fonction qui lance le bot
+TOKEN = os.environ.get("BOT_TOKEN")
 
-app = Flask(__name__)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot running ✅")
 
-@app.get("/")
-def home():
-    return "OK"
+def run_bot():
+    if not TOKEN:
+        print("❌ BOT_TOKEN manquant dans les variables d'environnement Render")
+        return
 
-if __name__ == "__main__":
-    # lance le bot dans un thread (ok car run_bot va gérer son propre asyncio)
-    threading.Thread(target=run_bot, daemon=True).start()
+    async def _main():
+        app = Application.builder().token(TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
 
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        # garde le bot vivant
+        await asyncio.Event().wait()
+
+    asyncio.run(_main())
