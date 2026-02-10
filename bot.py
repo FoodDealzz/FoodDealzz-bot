@@ -1,18 +1,18 @@
 import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+import threading
+from flask import Flask
 
-TOKEN = os.environ.get("BOT_TOKEN")  # Render env var
+from bot import run_bot  # on importe la fonction qui lance le bot
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot en ligne. Envoie /help si tu veux.")
+app = Flask(__name__)
 
-def run_bot():
-    if not TOKEN:
-        raise RuntimeError("BOT_TOKEN manquant dans les variables Render")
+@app.get("/")
+def home():
+    return "OK"
 
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
+if __name__ == "__main__":
+    # lance le bot dans un thread (ok car run_bot va gérer son propre asyncio)
+    threading.Thread(target=run_bot, daemon=True).start()
 
-    # Lance le bot en polling
-    app.run_polling()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
