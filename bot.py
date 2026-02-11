@@ -1,122 +1,114 @@
 import os
 import asyncio
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = os.environ.get("ADMIN_ID")  # doit être un nombre en texte, ex: "123456789"
+TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = int(os.environ.get("ADMIN_ID"))  # ton id telegram
 
-if not BOT_TOKEN:
-    raise RuntimeError("❌ BOT_TOKEN manquant (Render > Environment)")
-if not ADMIN_ID:
-    raise RuntimeError("❌ ADMIN_ID manquant (Render > Environment)")
-
-ADMIN_ID_INT = int(ADMIN_ID)
-
-# --- Clavier en bas (comme photo 2) ---
-MENU_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton("🛒 Commander")],
-        [KeyboardButton("📞 Contacter admin")],
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False,
-)
-
-# Petit “state” en mémoire : qui doit envoyer son lien
-WAITING_LINK = set()
-
+# ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # IMPORTANT : pas de “Bot running” -> direct menu
+    keyboard = [
+        ["🛒 Commander"],
+        ["📞 Contacter admin"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
     await update.message.reply_text(
         "Choisis une option :",
-        reply_markup=MENU_KEYBOARD,
+        reply_markup=reply_markup
     )
 
+# ================= CONTACT ADMIN =================
+
+async def contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📞 Un admin va te répondre ici.")
+
+    user = update.message.from_user
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"📞 Un client veut te contacter\n👤 {user.first_name}\n🆔 {user.id}"
+    )
+
+# ================= COMMANDER =================
 
 async def commander(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    WAITING_LINK.add(chat_id)
+    keyboard = [
+        ["🪙 Crypto"],
+        ["💳 Revolut"],
+        ["⚡️ Virement instantané"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
     await update.message.reply_text(
-        "📎 Envoie ton lien Uber Eats",
-        reply_markup=ReplyKeyboardRemove(),  # retire le clavier le temps d’envoyer le lien
+        "⚠️ CONDITIONS À LIRE\n\n"
+        "• Restaurants sans Uber One ❌ non éligibles -50%\n"
+        "• Offres Uber Eats (1 acheté = 1 offert) ✅ valables\n"
+        "• Plusieurs paniers possibles dans 1 restaurant\n\n"
+        "💰 Panier accepté uniquement entre 20€ et 23€ HT\n\n"
+        "Choisis ton moyen de paiement 👇",
+        reply_markup=reply_markup
     )
 
+# ================= PAIEMENT CHOISI =================
 
-async def contacter_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+async def paiement(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choix = update.message.text
 
-    # Message côté client
     await update.message.reply_text(
-        "✅ Ok. Un admin va te répondre ici.",
-        reply_markup=MENU_KEYBOARD,
+        f"💳 Paiement sélectionné : {choix}\n\n"
+        "📎 Envoie maintenant ton lien Uber Eats (commande groupée)\n\n"
+        "Si tu ne sais pas :\n"
+        "1. Prépare ton panier Uber Eats\n"
+        "2. Clique 'commander à plusieurs'\n"
+        "3. Copie le lien\n"
+        "4. Envoie-le ici"
     )
 
-    # Notif côté admin
-    txt = (
-        "📞 Demande admin\n"
-        f"👤 {user.full_name}\n"
-        f"🆔 {user.id}\n"
-        f"💬 ChatID: {update.effective_chat.id}"
-    )
-    await context.bot.send_message(chat_id=ADMIN_ID_INT, text=txt)
+    context.user_data["attend_lien"] = True
 
+# ================= RECEPTION LIEN CLIENT =================
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user = update.effective_user
-    text = (update.message.text or "").strip()
-
-    # Si il a cliqué sur les boutons (ReplyKeyboard) -> on route
-    if text == "🛒 Commander":
-        return await commander(update, context)
-    if text == "📞 Contacter admin":
-        return await contacter_admin(update, context)
-
-    # Si on attend un lien Uber Eats
-    if chat_id in WAITING_LINK:
-        WAITING_LINK.discard(chat_id)
-
-        # Envoie à l’admin
-        admin_msg = (
-            "🛒 Nouvelle commande\n"
-            f"👤 {user.full_name}\n"
-            f"🆔 {user.id}\n"
-            f"🔗 {text}"
-        )
-        await context.bot.send_message(chat_id=ADMIN_ID_INT, text=admin_msg)
-
-        # Réponse client
-        await update.message.reply_text(
-            "✅ Lien reçu. Un admin va répondre ici.",
-            reply_markup=MENU_KEYBOARD,
-        )
+async def recevoir_lien(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("attend_lien"):
         return
 
-    # Sinon, on remet juste le menu
-    await update.message.reply_text(
-        "Choisis une option :",
-        reply_markup=MENU_KEYBOARD,
+    lien = update.message.text
+    user = update.message.from_user
+
+    # message pour admin
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            "🛒 NOUVELLE COMMANDE\n\n"
+            f"👤 {user.first_name}\n"
+            f"🆔 {user.id}\n"
+            f"🔗 {lien}"
+        )
     )
 
+    # confirmation client
+    await update.message.reply_text(
+        "✅ Lien reçu. Un admin prépare ta commande maintenant."
+    )
+
+    context.user_data["attend_lien"] = False
+
+# ================= MAIN =================
 
 async def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.Regex("📞 Contacter admin"), contact_admin))
+    app.add_handler(MessageHandler(filters.Regex("🛒 Commander"), commander))
+    app.add_handler(MessageHandler(filters.Regex("Crypto|Revolut|Virement"), paiement))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recevoir_lien))
 
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
+    print("BOT FOODDEALZZ ACTIF 🚀")
+    await app.run_polling()
 
-    # garde le bot vivant
-    await asyncio.Event().wait()
+if __name__ == "__main__":
+    asyncio.run(main())
