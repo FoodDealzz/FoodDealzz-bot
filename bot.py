@@ -1,10 +1,5 @@
 import os
-import re
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,187 +11,116 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# --- états simples ---
-STATE_MENU = "menu"
-STATE_PAYMENT = "payment"
-STATE_WAIT_LINK = "wait_link"
-STATE_CONTACT_ADMIN = "contact_admin"
+# états utilisateur
+STATE_NONE = 0
+STATE_WAIT_PAYMENT = 1
+STATE_WAIT_LINK = 2
 
-USER_STATE = {}  # user_id -> {"state": ..., "payment": ..., "last_menu_msg_id": ...}
+USER_STATE = {}
 
-# Ton message d’infos (celui que tu voulais ajouter)
 INFO_MSG = (
-    "ℹ️ *Infos importantes*\n"
-    "• Les restaurants sans *Uber One* ne sont malheureusement pas éligibles à la réduction *-50%*.\n"
-    "• Vous pouvez préparer plusieurs paniers dans le même restaurant si vous souhaitez cumuler vos commandes.\n"
-    "• Les offres spéciales Uber Eats (ex: *1 acheté = 1 offert*) sont prises en charge et restent valables avec la réduction.\n"
+"📌 Infos importantes :\n\n"
+"• Les restaurants sans Uber One ne sont pas éligibles à la réduction -50%\n"
+"• Vous pouvez faire plusieurs paniers dans le même restaurant\n"
+"• Les offres Uber Eats (1 acheté = 1 offert) restent valables\n"
 )
 
-def get_state(user_id: int):
-    if user_id not in USER_STATE:
-        USER_STATE[user_id] = {"state": STATE_MENU, "payment": None, "last_menu_msg_id": None}
-    return USER_STATE[user_id]
+# --- clavier principal ---
+def main_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🛒 Commander")],
+            [KeyboardButton("📞 Contacter admin")],
+        ],
+        resize_keyboard=True
+    )
 
-async def clean_previous_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Supprime l’ancien message menu du bot (pour pas spammer)."""
+# --- clavier paiement ---
+def payment_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("💎 Crypto")],
+            [KeyboardButton("💳 Revolut")],
+            [KeyboardButton("🏦 Virement instantané")],
+        ],
+        resize_keyboard=True
+    )
+
+# --- start ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    USER_STATE[update.effective_user.id] = {"state": STATE_NONE}
+    await update.message.reply_text(
+        "Bienvenue 👋\nClique sur commander pour envoyer ton lien.",
+        reply_markup=main_keyboard()
+    )
+
+# --- message handler ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    st = get_state(user_id)
-    msg_id = st.get("last_menu_msg_id")
-    if msg_id:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-        except Exception:
-            pass
-        st["last_menu_msg_id"] = None
+    text = update.message.text
+    st = USER_STATE.get(user_id, {"state": STATE_NONE})
+    state = st.get("state", STATE_NONE)
 
-async def send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await clean_previous_menu(update, context)
-
-    keyboard = [["🛒 Commander"], ["📞 Contacter admin"]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-    sent = await update.effective_chat.send_message("Choisis une option :", reply_markup=markup)
-    st = get_state(update.effective_user.id)
-    st["state"] = STATE_MENU
-    st["last_menu_msg_id"] = sent.message_id
-
-async def send_payment_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await clean_previous_menu(update, context)
-
-    keyboard = [["₿ Crypto", "💳 Revolut"], ["⚡️ Virement instantané"], ["↩️ Retour"]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-    sent = await update.effective_chat.send_message("Choisis ton mode de paiement :", reply_markup=markup)
-    st = get_state(update.effective_user.id)
-    st["state"] = STATE_PAYMENT
-    st["last_menu_msg_id"] = sent.message_id
-
-def is_valid_link(text: str) -> bool:
-    if not text:
-        return False
-    return bool(re.search(r"https?://", text)) or ("uber" in text.lower())
-
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # On n’envoie PAS “Bot running” — on envoie direct le menu
-    await update.message.reply_text(INFO_MSG, parse_mode="Markdown")
-    await send_menu(update, context)
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
+    # bouton commander
+    if text == "🛒 Commander":
+        USER_STATE[user_id] = {"state": STATE_WAIT_PAYMENT}
+        await update.message.reply_text(
+            INFO_MSG + "\nChoisis ton moyen de paiement 👇",
+            reply_markup=payment_keyboard()
+        )
         return
 
-    user = update.effective_user
-    user_id = user.id
-    text = (update.message.text or "").strip()
-
-    st = get_state(user_id)
-    state = st["state"]
-
-    # Bouton retour
-    if text == "↩️ Retour":
-        await send_menu(update, context)
+    # bouton contacter admin
+    if text == "📞 Contacter admin":
+        await update.message.reply_text(
+            "📩 Envoie ton message, un admin va répondre.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        USER_STATE[user_id] = {"state": STATE_NONE}
         return
 
-    # MENU
-    if state == STATE_MENU:
-        if text == "🛒 Commander":
-            await send_payment_menu(update, context)
-            return
-
-        if text == "📞 Contacter admin":
-            st["state"] = STATE_CONTACT_ADMIN
-            await update.message.reply_text(
-                "📩 Écris ton message ici, je le transfère à un admin.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            return
-
-        # Si le client écrit autre chose au menu => on renvoie le menu
-        await send_menu(update, context)
+    # choix paiement
+    if state == STATE_WAIT_PAYMENT:
+        USER_STATE[user_id] = {
+            "state": STATE_WAIT_LINK,
+            "payment": text
+        }
+        await update.message.reply_text(
+            "🔗 Envoie ton lien Uber Eats (commande groupée).\n"
+            "Si tu ne sais pas : clique sur 'commander en groupe' sur Uber Eats et copie le lien.",
+            reply_markup=ReplyKeyboardRemove()
+        )
         return
 
-    # PAYMENT
-    if state == STATE_PAYMENT:
-        if text in ("₿ Crypto", "💳 Revolut", "⚡️ Virement instantané"):st["payment"] = text
-            st["state"] = STATE_WAIT_LINK
+    # attente lien
+    if state == STATE_WAIT_LINK:
+        payment = st.get("payment", "Non précisé")
 
-            await update.message.reply_text(
-                "🔗 Envoie ton *lien Uber Eats (commande groupée)*.\n\n"
-                "👉 Astuce : sur Uber Eats, crée ton panier puis partage le lien de commande.",
-                parse_mode="Markdown",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            return
+        await update.message.reply_text(
+            "✅ Lien reçu. Un admin va répondre ici.",
+            reply_markup=main_keyboard()
+        )
 
-        await send_payment_menu(update, context)
-        return
-
-    # WAIT LINK
-        if state == STATE_WAIT_LINK:
-        if is_valid_link(text):
-            payment = st.get("payment") or "Non précisé"
-
-            # Confirme au client
-            await update.message.reply_text("✅ Lien reçu. Un admin va répondre ici.")
-
-            # Notif admin instantanée
-            if ADMIN_ID != 0:
-                msg_admin = (
-                    "🛒 *Nouvelle commande*\n"
-                    f"👤 {user.full_name}\n"
-                    f"🆔 `{user_id}`\n"
-                    f"💳 Paiement : *{payment}*\n"
-                    f"🔗 Lien : {text}"
-                )
-                try:
-                    await context.bot.send_message(chat_id=ADMIN_ID, text=msg_admin, parse_mode="Markdown")
-                except Exception:
-                    pass
-
-            # Retour menu
-            await send_menu(update, context)
-            return
-
-        await update.message.reply_text("❌ Je n’ai pas reconnu le lien. Renvoie le lien Uber Eats stp.")
-        return
-
-    # CONTACT ADMIN
-    if state == STATE_CONTACT_ADMIN:
+        # notif admin
         if ADMIN_ID != 0:
-            msg_admin = (
-                "📞 *Message client*\n"
-                f"👤 {user.full_name}\n"
-                f"🆔 `{user_id}`\n"
-                f"💬 {text}"
+            name = update.effective_user.full_name
+            msg = (
+                f"🛒 Nouvelle commande\n"
+                f"👤 {name}\n"
+                f"🆔 {user_id}\n"
+                f"💰 {payment}\n"
+                f"🔗 {text}"
             )
-            try:
-                await context.bot.send_message(chat_id=ADMIN_ID, text=msg_admin, parse_mode="Markdown")
-            except Exception:
-                pass
+            await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
 
-        await update.message.reply_text("✅ Message envoyé à un admin. On te répond ici.")
-        await send_menu(update, context)
+        USER_STATE[user_id] = {"state": STATE_NONE}
         return
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    # Évite crash silencieux
-    try:
-        print("ERROR:", context.error)
-    except Exception:
-        pass
 
+# --- lancement ---
 def run_bot():
-    if not BOT_TOKEN:
-        print("❌ BOT_TOKEN manquant dans les variables d’environnement Render")
-        return
-    if ADMIN_ID == 0:
-        print("⚠️ ADMIN_ID manquant ou à 0 (tu ne recevras pas les notifs admin)")
-
     app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_error_handler(error_handler)
-
-    # IMPORTANT: polling (pas webhook)
-    app.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("BOT LANCÉ")
+    app.run_polling()
