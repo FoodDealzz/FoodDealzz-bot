@@ -1,114 +1,85 @@
 import os
-import asyncio
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID"))  # ton id telegram
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# ================= START =================
+user_state = {}
 
+# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         ["🛒 Commander"],
         ["📞 Contacter admin"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("Choisis une option :", reply_markup=reply_markup)
 
-    await update.message.reply_text(
-        "Choisis une option :",
-        reply_markup=reply_markup
-    )
+# ===== BOUTONS =====
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user_id = update.message.from_user.id
+    name = update.message.from_user.full_name
 
-# ================= CONTACT ADMIN =================
+    if text == "🛒 Commander":
+        keyboard = [
+            ["₿ Crypto"],
+            ["💳 Revolut"],
+            ["🏦 Virement instantané"]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-async def contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📞 Un admin va te répondre ici.")
-
-    user = update.message.from_user
-
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"📞 Un client veut te contacter\n👤 {user.first_name}\n🆔 {user.id}"
-    )
-
-# ================= COMMANDER =================
-
-async def commander(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        ["🪙 Crypto"],
-        ["💳 Revolut"],
-        ["⚡️ Virement instantané"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-    await update.message.reply_text(
-        "⚠️ CONDITIONS À LIRE\n\n"
-        "• Restaurants sans Uber One ❌ non éligibles -50%\n"
-        "• Offres Uber Eats (1 acheté = 1 offert) ✅ valables\n"
-        "• Plusieurs paniers possibles dans 1 restaurant\n\n"
-        "💰 Panier accepté uniquement entre 20€ et 23€ HT\n\n"
-        "Choisis ton moyen de paiement 👇",
-        reply_markup=reply_markup
-    )
-
-# ================= PAIEMENT CHOISI =================
-
-async def paiement(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    choix = update.message.text
-
-    await update.message.reply_text(
-        f"💳 Paiement sélectionné : {choix}\n\n"
-        "📎 Envoie maintenant ton lien Uber Eats (commande groupée)\n\n"
-        "Si tu ne sais pas :\n"
-        "1. Prépare ton panier Uber Eats\n"
-        "2. Clique 'commander à plusieurs'\n"
-        "3. Copie le lien\n"
-        "4. Envoie-le ici"
-    )
-
-    context.user_data["attend_lien"] = True
-
-# ================= RECEPTION LIEN CLIENT =================
-
-async def recevoir_lien(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("attend_lien"):
-        return
-
-    lien = update.message.text
-    user = update.message.from_user
-
-    # message pour admin
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            "🛒 NOUVELLE COMMANDE\n\n"
-            f"👤 {user.first_name}\n"
-            f"🆔 {user.id}\n"
-            f"🔗 {lien}"
+        await update.message.reply_text(
+            "💰 Choisis ton mode de paiement :",
+            reply_markup=reply_markup
         )
-    )
+        user_state[user_id] = "payment"
 
-    # confirmation client
-    await update.message.reply_text(
-        "✅ Lien reçu. Un admin prépare ta commande maintenant."
-    )
+    elif text in ["₿ Crypto", "💳 Revolut", "🏦 Virement instantané"]:
+        user_state[user_id] = "waiting_link"
 
-    context.user_data["attend_lien"] = False
+        await update.message.reply_text(
+            "📦 Envoie maintenant ton lien Uber Eats (commande groupée).\n\n"
+            "Si tu ne sais pas :\n"
+            "1. Va sur Uber Eats\n"
+            "2. Crée ton panier\n"
+            "3. Clique sur 'commande groupée'\n"
+            "4. Envoie le lien ici"
+        )
 
-# ================= MAIN =================
+    elif text == "📞 Contacter admin":
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"📞 Un client demande à te parler :\n👤 {name}\n🆔 {user_id}"
+        )
+        await update.message.reply_text("✅ Admin contacté.")
 
-async def main():
-    app = Application.builder().token(TOKEN).build()
+# ===== LIEN CLIENT =====
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    name = update.message.from_user.full_name
+    text = update.message.text
+
+    if user_state.get(user_id) == "waiting_link":
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"🔥 NOUVELLE COMMANDE\n\n👤 {name}\n🆔 {user_id}\n🔗 {text}"
+        )
+
+        await update.message.reply_text("✅ Lien reçu. Un admin va traiter ta commande.")
+        user_state[user_id] = None
+
+# ===== MAIN =====
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex("📞 Contacter admin"), contact_admin))
-    app.add_handler(MessageHandler(filters.Regex("🛒 Commander"), commander))
-    app.add_handler(MessageHandler(filters.Regex("Crypto|Revolut|Virement"), paiement))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recevoir_lien))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
-    print("BOT FOODDEALZZ ACTIF 🚀")
-    await app.run_polling()
+    print("BOT RUNNING 24/24 🚀")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
