@@ -132,7 +132,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # WAIT LINK
-    if state == STATE_WAIT_LINK:
+        if state == STATE_WAIT_LINK:
         if is_valid_link(text):
             payment = st.get("payment") or "Non précisé"
 
